@@ -1,0 +1,6 @@
+/set_team_coordinates_ER HellWorbie 600 600
+/set_team_coordinates_ER Cadia -600 600
+/set_team_coordinates_ER BardunFirenoob 300 -300
+/set_team_coordinates_ER FerrerNearCold -300 300
+/set_team_coordinates_ER DuckGeoMus -600 0
+/mod_gamerules_ER graceRange 145
