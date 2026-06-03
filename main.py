@@ -15,24 +15,30 @@ Teams file format (one team per line, color is REQUIRED, second token):
    TEF       red      A1  C3  G2  F1
    Nomads    dark_blue
 
+Zones file format (custom spawn points, one per line):
+   500  -300
+   -100 700
+   # comment lines are ignored
+
 Valid Minecraft 1.21 team colors:
   black, dark_blue, dark_green, dark_aqua, dark_red, dark_purple,
   gold, gray, dark_gray, blue, green, aqua, red, light_purple, yellow, white
 
 Arguments:
-    --image     Path to the Minecraft map image
-    --size      Map side length in blocks (map goes from -size/2 to +size/2)
-    --spacing   Distance D between spawn points in blocks
-    --border    Minimum distance from border (default: 100 blocks)
-    --output    Output image path (default: map_with_spawns.png)
-    --teams     Path to teams text file (activates war mode)
-    --war-out   Output image for war results (default: map_war_result.png)
-    --dot-size  Radius of the small center dot in pixels (default: auto)
-    --font-size Font size in pixels (default: auto)
-    --color     Grid dot color as R,G,B (default: 255,50,50)
-    --grace_range     Grace zone radius in blocks (default: 145)
-    --seed      Random seed for conflict resolution (default: random)
-    --exclude   Path to file with grid labels to exclude
+    --image       Path to the Minecraft map image
+    --size        Map side length in blocks (map goes from -size/2 to +size/2)
+    --spacing     Distance D between spawn points in blocks
+    --border      Minimum distance from border (default: 100 blocks)
+    --output      Output image path (default: map_with_spawns.png)
+    --teams       Path to teams text file (activates war mode)
+    --war-out     Output image for war results (default: map_war_result.png)
+    --dot-size    Radius of the small center dot in pixels (default: auto)
+    --font-size   Font size in pixels (default: 30)
+    --color       Grid dot color as R,G,B (default: 255,50,50)
+    --grace_range Grace zone radius in blocks (default: 145)
+    --seed        Random seed for conflict resolution (default: random)
+    --exclude     Path to file with grid labels to exclude (default: exclude.txt)
+    --zones       Path to file with custom x z coordinates (default: zones.txt)
 """
 
 import argparse
@@ -69,10 +75,9 @@ MC_COLORS: dict[str, tuple[int, int, int]] = {
     "white":        (255, 255, 255),
 }
 
-# Brighten very dark colors so they're visible on the map overlay
 def _visible(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Brighten very dark colors so they're readable on the map."""
     r, g, b = rgb
-    # If luminance is too low, blend toward a lighter version
     lum = 0.299 * r + 0.587 * g + 0.114 * b
     if lum < 60:
         factor = 0.55
@@ -96,7 +101,6 @@ def col_label(n: int) -> str:
         s = chr(65 + n % 26) + s
         n //= 26
     return s
-
 
 def make_label(col_idx: int, row_idx: int) -> str:
     return f"{col_label(col_idx)}{row_idx + 1}"
@@ -136,6 +140,34 @@ def generate_spawn_points(
     row_map = {v: i for i, v in enumerate(zs_sorted)}
 
     return [(bx, bz, make_label(col_map[bx], row_map[bz])) for bx, bz in raw]
+
+
+# ---------------------------------------------------------------------------
+# Custom zones loader  (labels: X1, X2, X3, …)
+# ---------------------------------------------------------------------------
+
+def parse_custom_zones(zones_path: str) -> list[tuple[int, int, str]]:
+    """
+    Read a file of custom spawn coordinates, one 'x z' pair per line.
+    Returns [(bx, bz, 'X1'), (bx, bz, 'X2'), ...]
+    """
+    zones = []
+    with open(zones_path) as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                print(f"  ⚠  zones line {lineno}: expected 'x z', got '{line}' — skipped")
+                continue
+            try:
+                bx, bz = int(parts[0]), int(parts[1])
+            except ValueError:
+                print(f"  ⚠  zones line {lineno}: could not parse integers from '{line}' — skipped")
+                continue
+            zones.append((bx, bz, f"X{len(zones) + 1}"))
+    return zones
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +220,9 @@ def load_fonts(font_size: int):
 
 def parse_teams(teams_path: str) -> list[tuple[str, str, list[str]]]:
     """
-    Parse teams file. Returns [(team_name, mc_color_key, [pick1, pick2, ...]), ...]
-
-    Format per line:
-        TeamName  <mc_color>  [pick1 pick2 ...]
-
-    Color is the SECOND token and is required.
-    Picks are optional (empty list = fully random).
+    Returns [(team_name, mc_color_key, [pick1, pick2, ...]), ...]
+    Format: TeamName  <mc_color>  [pick1 pick2 ...]
+    Color is required. Picks are optional (empty = fully random).
     """
     teams = []
     errors = []
@@ -231,6 +259,8 @@ def parse_teams(teams_path: str) -> list[tuple[str, str, list[str]]]:
         if not teams:
             sys.exit(1)
 
+    teams = sorted(teams, key=lambda t: (t[1], t[2], t[0]))
+
     return teams
 
 
@@ -247,14 +277,14 @@ def resolve_spawns(
     Priority-based conflict resolution with random tiebreaking.
     Returns assignments: {team_name: (bx, bz, label, mc_color_key)}
     """
+
     excluded = excluded or set()
     assigned: dict[str, tuple[int, int, str, str]] = {}
     taken: set[str] = set()
     log: list[str] = []
-    waiting: list[tuple[str, str]] = []  # (team_name, color_key)
+    waiting: list[tuple[str, str]] = []
 
-    # Strip excluded labels and build pending dict
-    pending: dict[str, tuple[str, list[str]]] = {}  # name → (color_key, picks)
+    pending: dict[str, tuple[str, list[str]]] = {}
     for name, color_key, picks in teams:
         clean = [p for p in picks if p not in excluded]
         if len(clean) < len(picks):
@@ -304,7 +334,6 @@ def resolve_spawns(
             else:
                 log.append(f"Round {round_num} | {spot}: assigned to {winner}")
 
-    # Random fallback phase
     if waiting:
         log.append(f"--- Random fallback phase: {', '.join(t for t, _ in waiting)} ---")
         random.shuffle(waiting)
@@ -323,6 +352,32 @@ def resolve_spawns(
 
 
 # ---------------------------------------------------------------------------
+# Shared point drawing helper
+# ---------------------------------------------------------------------------
+
+def draw_point(draw, px, py, dot_radius, grace_px, fill_color, label, coords_str,
+               label_font, coords_font, white_solid=(255, 255, 255, 255)):
+    """Draw one spawn point: grace circle + dot + label above + coords below."""
+    draw.ellipse(
+        [px - grace_px, py - grace_px, px + grace_px, py + grace_px],
+        outline=(*fill_color[:3], 120),
+        width=max(1, dot_radius // 2),
+    )
+    draw.ellipse(
+        [px - dot_radius - 1, py - dot_radius - 1,
+         px + dot_radius + 1, py + dot_radius + 1],
+        fill=white_solid,
+    )
+    draw.ellipse(
+        [px - dot_radius, py - dot_radius, px + dot_radius, py + dot_radius],
+        fill=fill_color,
+    )
+    gap = dot_radius + 3
+    draw_text_shadowed(draw, (px, py - gap), label,      label_font, fill_color,            anchor="mb")
+    draw_text_shadowed(draw, (px, py + gap), coords_str, coords_font, (200, 200, 200, 220), anchor="mt")
+
+
+# ---------------------------------------------------------------------------
 # Grid image (mode 1)
 # ---------------------------------------------------------------------------
 
@@ -337,6 +392,7 @@ def plot_grid(
         font_size: int | None = None,
         grace_range: int = 145,
         excluded: set = None,
+        custom_zones: list = None,
 ):
     img = Image.open(image_path).convert("RGBA")
     img_w, img_h = img.size
@@ -347,36 +403,23 @@ def plot_grid(
         font_size = max(11, int((img_w + img_h) / 2 * 0.013))
 
     label_font, coords_font, _ = load_fonts(font_size)
+
     points = generate_spawn_points(map_size, spacing, border_margin)
     if excluded:
         points = [(bx, bz, lbl) for bx, bz, lbl in points if lbl not in excluded]
+    if custom_zones:
+        points = points + custom_zones
 
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    fill_color  = (*color, 210)
-    white_solid = (255, 255, 255, 255)
-    grace_px    = int(grace_range / map_size * img_w)
+    fill_color = (*color, 210)
+    grace_px   = int(grace_range / map_size * img_w)
 
     for bx, bz, label in points:
         px, py = blocks_to_pixels(bx, bz, map_size, img_w, img_h)
-        draw.ellipse(
-            [px - dot_radius - 1, py - dot_radius - 1,
-             px + dot_radius + 1, py + dot_radius + 1],
-            fill=white_solid,
-        )
-        draw.ellipse(
-            [px - dot_radius, py - dot_radius, px + dot_radius, py + dot_radius],
-            fill=fill_color,
-        )
-        draw.ellipse(
-            [px - grace_px, py - grace_px, px + grace_px, py + grace_px],
-            outline=(*color, 120),
-            width=max(1, dot_radius // 2),
-        )
-        gap = dot_radius + 3
-        draw_text_shadowed(draw, (px, py - gap), label, label_font, fill_color, anchor="mb")
-        draw_text_shadowed(draw, (px, py + gap), f"{bx}, {bz}", coords_font, (200, 200, 200, 220), anchor="mt")
+        draw_point(draw, px, py, dot_radius, grace_px, fill_color,
+                   label, f"{bx}, {bz}", label_font, coords_font)
 
     combined = Image.alpha_composite(img, overlay).convert("RGB")
     combined.save(output_path)
@@ -398,6 +441,7 @@ def plot_war_result(
         font_size: int | None = None,
         grace_range: int = 145,
         excluded: set = None,
+        custom_zones: list = None,
 ):
     img = Image.open(image_path).convert("RGBA")
     img_w, img_h = img.size
@@ -409,9 +453,13 @@ def plot_war_result(
 
     label_font, coords_font, small_font = load_fonts(font_size)
 
+    # All valid points (for faint background)
     points = generate_spawn_points(map_size, spacing, border_margin)
     if excluded:
         points = [(bx, bz, lbl) for bx, bz, lbl in points if lbl not in excluded]
+    if custom_zones:
+        points = points + custom_zones
+
     assigned_labels = {lbl for _, _, lbl, _ in assignments.values()}
     bg_points = [(bx, bz, lbl) for bx, bz, lbl in points if lbl not in assigned_labels]
 
@@ -448,10 +496,10 @@ def plot_war_result(
         )
 
         gap = dot_radius + 4
-        draw_text_shadowed(draw, (px, py - gap), team, label_font, (*color, 255), anchor="mb")
+        draw_text_shadowed(draw, (px, py - gap), team,       label_font,  (*color, 255),       anchor="mb")
         draw_text_shadowed(draw, (px, py + gap), spot_label, coords_font, (255, 255, 255, 230), anchor="mt")
-        draw_text_shadowed(draw, (px, py + gap + int(font_size * 0.8)), f"{bx}, {bz}", coords_font,
-                           (200, 200, 200, 200), anchor="mt")
+        draw_text_shadowed(draw, (px, py + gap + int(font_size * 0.8)), f"{bx}, {bz}",
+                           coords_font, (200, 200, 200, 200), anchor="mt")
 
     combined = Image.alpha_composite(img, overlay).convert("RGB")
     combined.save(output_path)
@@ -466,23 +514,57 @@ def main():
     parser = argparse.ArgumentParser(
         description="Overlay spawn grid / resolve team war spawns on a Minecraft map image."
     )
-    parser.add_argument("--image",      default="map.png",              help="Path to the map image")
-    parser.add_argument("--size",       default=1400,       type=int,   help="Map size in blocks (side length)")
-    parser.add_argument("--spacing",    default=300,        type=int,   help="Distance D between spawn points in blocks")
-    parser.add_argument("--border",     default=100,        type=int,   help="Min distance from border in blocks (default: 100)")
-    parser.add_argument("--output",     default="map_with_spawns.png",  help="Grid output image")
-    parser.add_argument("--teams",      default="teams.txt",            help="Path to teams picks file (activates war mode)")
-    parser.add_argument("--war-out",    default="map_war_result.png",   help="War result image")
-    parser.add_argument("--dot-size",   default=None,       type=int,   help="Dot radius in pixels (default: auto)")
-    parser.add_argument("--font-size",  default=30,         type=int,   help="Label font size in pixels")
-    parser.add_argument("--color",      default="255,50,50",            help="Grid dot color R,G,B (default: 255,50,50)")
-    parser.add_argument("--grace_range",default=145,        type=int,   help="Grace zone radius in blocks (default: 145)")
-    parser.add_argument("--seed",       default=None,       type=int,   help="Random seed for conflict resolution")
-    parser.add_argument("--exclude",    default="exclude.txt",          help="Path to file with grid labels to exclude")
+    parser.add_argument("--prefix", default="EVENT2/EVENT2",
+                        help="File prefix for all event files, e.g. 'EVENT2' → EVENT2_map.png, EVENT2_teams.txt, …")
+    parser.add_argument("--size", default=2800, type=int, help="Map size in blocks (side length)")
+    parser.add_argument("--spacing", default=300, type=int, help="Distance D between spawn points in blocks")
+    parser.add_argument("--border", default=100, type=int, help="Min distance from border in blocks (default: 100)")
+    parser.add_argument("--dot-size", default=None, type=int, help="Dot radius in pixels (default: auto)")
+    parser.add_argument("--font-size", default=30, type=int, help="Label font size in pixels")
+    parser.add_argument("--color", default="255,50,50", help="Grid dot color R,G,B (default: 255,50,50)")
+    parser.add_argument("--grace_range", default=145, type=int, help="Grace zone radius in blocks (default: 145)")
+    parser.add_argument("--seed", default=42, type=int, help="Random seed for conflict resolution")
     args = parser.parse_args()
 
-    if not Path(args.image).exists():
-        print(f"Error: image file '{args.image}' not found.")
+    # Build all file paths from prefix.
+    # If prefix is "EVENT2"     → "EVENT2_map.png"
+    # If prefix is "events/"    → "events/map.png"   (trailing slash = directory)
+    # If prefix is ""           → "map.png"           (no prefix at all)
+    p = args.prefix
+    if p and not p.endswith(("/", "\\")):
+        def pf(name):
+            return f"{p}_{name}"
+    elif p:
+        def pf(name):
+            return f"{p}{name}"
+    else:
+        def pf(name):
+            return name
+
+    image_path = pf("map.png")
+    teams_path = pf("teams.txt")
+    exclude_path = pf("exclude.txt")
+    zones_path = pf("zones.txt")
+    output_path = pf("map_with_spawns.png")
+    war_out_path = pf("map_war_result.png")
+
+    if p:
+        print(f"Prefix:  '{p}'")
+        print(f"  map          → {image_path}")
+        print(f"  teams        → {teams_path}")
+        print(f"  exclude      → {exclude_path}")
+        print(f"  zones        → {zones_path}")
+        print(f"  grid output  → {output_path}")
+        print(f"  war output   → {war_out_path}")
+        print()
+
+    # New
+    # Auto-create the prefix directory if needed
+    if p and p.endswith(("/", "\\")):
+        Path(p).mkdir(parents=True, exist_ok=True)
+
+    if not Path(image_path).exists():
+        print(f"Error: image file '{image_path}' not found.")
         sys.exit(1)
 
     try:
@@ -502,43 +584,58 @@ def main():
 
     # Load excluded labels
     excluded: set[str] = set()
-    if args.exclude and Path(args.exclude).exists():
-        for line in Path(args.exclude).read_text().splitlines():
-            for token in line.strip().split():
-                if token and not token.startswith("#"):
-                    excluded.add(token.upper())
+    if not Path(exclude_path).exists():
+        Path(exclude_path).write_text("")
+        print(f"Created empty exclude file: {exclude_path}")
+    for line in Path(exclude_path).read_text().splitlines():
+        for token in line.strip().split():
+            if token and not token.startswith("#"):
+                excluded.add(token.upper())
+    if excluded:
         print(f"Excluded points:   {len(excluded)} ({', '.join(sorted(excluded))})")
-    elif args.exclude and not Path(args.exclude).exists():
-        print(f"Note: exclude file '{args.exclude}' not found — skipping.")
+
+    # Load custom zones
+    custom_zones: list[tuple[int, int, str]] = []
+    # New
+    if not Path(zones_path).exists():
+        Path(zones_path).write_text("")
+        print(f"Created empty zones file: {zones_path}")
+    custom_zones = parse_custom_zones(zones_path)
+    if custom_zones:
+        print(f"Custom zones:      {len(custom_zones)} ({', '.join(lbl for _, _, lbl in custom_zones)})")
 
     # Grid image
     points, out = plot_grid(
-        image_path=args.image,
+        image_path=image_path,
         map_size=args.size,
         spacing=args.spacing,
         border_margin=args.border,
-        output_path=args.output,
+        output_path=output_path,
         dot_radius=args.dot_size,
         color=color,
         font_size=args.font_size,
         grace_range=args.grace_range,
         excluded=excluded,
+        custom_zones=custom_zones,
     )
     print(f"\nGrid image saved to: {out}")
-    print(f"Valid spawn points:  {len(points)}")
+    print(f"Total spawn points:  {len(points)}  (grid: {len(points) - len(custom_zones)}, custom: {len(custom_zones)})")
 
     label_to_point = {label: (bx, bz) for bx, bz, label in points}
 
     # War mode
-    if not Path(args.teams).exists():
-        print(f"\nNo teams file found at '{args.teams}' — grid-only mode.")
+    # New
+    if not Path(teams_path).exists():
+        Path(teams_path).write_text("")
+        print(f"Created empty teams file: {teams_path}")
+        print(f"\nNo teams configured — grid-only mode.")
         print(f"\n{'Label':<8} {'X':>7}  {'Z':>7}")
         print("-" * 25)
         for bx, bz, label in points:
             print(f"{label:<8} {bx:>7}  {bz:>7}")
         return
 
-    teams = parse_teams(args.teams)
+    teams = parse_teams(teams_path)
     print(f"\nTeams loaded: {len(teams)}")
     for name, color_key, picks in teams:
         picks_str = ', '.join(picks) if picks else '(random)'
@@ -561,21 +658,22 @@ def main():
     for cmd in commands:
         print(cmd)
 
-    commands_file = Path(args.war_out).stem + "_commands.txt"
+    commands_file = Path(war_out_path).stem + "_commands.txt"
     Path(commands_file).write_text("\n".join(commands) + "\n")
     print(f"\nCommands saved to: {commands_file}")
 
     war_img = plot_war_result(
-        image_path=args.image,
+        image_path=image_path,
         map_size=args.size,
         spacing=args.spacing,
         border_margin=args.border,
         assignments=assignments,
-        output_path=args.war_out,
+        output_path=war_out_path,
         dot_radius=args.dot_size,
         font_size=args.font_size,
         grace_range=args.grace_range,
         excluded=excluded,
+        custom_zones=custom_zones,
     )
     print(f"War result image:  {war_img}")
 

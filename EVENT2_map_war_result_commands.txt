@@ -1,0 +1,5 @@
+/set_team_coordinates_ER TRT -800 -150
+/set_team_coordinates_ER Buddies -300 300
+/set_team_coordinates_ER TAF 0 -300
+/set_team_coordinates_ER TCR 0 -600
+/mod_gamerules_ER graceRange 145

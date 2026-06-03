@@ -1,0 +1,5 @@
+/set_team_coordinates_ER HellstormFirenoob 600 -900
+/set_team_coordinates_ER Mussie -900 900
+/set_team_coordinates_ER NearFerrer 900 0
+/set_team_coordinates_ER WoorbieBardun 300 -300
+/mod_gamerules_ER graceRange 145
