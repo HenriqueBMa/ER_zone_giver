@@ -1,5 +1,4 @@
-/set_team_coordinates_ER TRT -800 -150
-/set_team_coordinates_ER Buddies -300 300
-/set_team_coordinates_ER TAF 0 -300
-/set_team_coordinates_ER TCR 0 -600
+/set_team_coordinates_ER Rising_Tide -800 -150
+/set_team_coordinates_ER Arakawa_Family 150 1250
+/set_team_coordinates_ER County_of_Rattenburg 600 600
 /mod_gamerules_ER graceRange 145

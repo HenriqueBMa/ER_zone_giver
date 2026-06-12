@@ -515,8 +515,8 @@ def main():
         description="Overlay spawn grid / resolve team war spawns on a Minecraft map image."
     )
     parser.add_argument("--prefix", default="EVENT2/EVENT2",
-                        help="File prefix for all event files, e.g. 'EVENT2' → EVENT2_map.png, EVENT2_teams.txt, …")
-    parser.add_argument("--size", default=2800, type=int, help="Map size in blocks (side length)")
+                        help="File prefix for all event files, e.g. 'c' → EVENT2.png, EVENT2_teams.txt, …")
+    parser.add_argument("--size", default=3000, type=int, help="Map size in blocks (side length)")
     parser.add_argument("--spacing", default=300, type=int, help="Distance D between spawn points in blocks")
     parser.add_argument("--border", default=100, type=int, help="Min distance from border in blocks (default: 100)")
     parser.add_argument("--dot-size", default=None, type=int, help="Dot radius in pixels (default: auto)")
