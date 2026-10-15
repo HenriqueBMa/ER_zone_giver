@@ -47,6 +47,7 @@ import math
 import random
 import sys
 from pathlib import Path
+from crop_map import crop_map
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -66,7 +67,8 @@ WATER_BEACH_COLORS = {
     (0,0,144),
     (0,0,172),
     (0, 0, 255),
-    (112,112,214)
+    (112,112,214),
+    (0,0,0)
 }
 
 WATER_BEACH_THRESHOLD = 0.7
@@ -681,13 +683,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Overlay spawn grid / resolve team war spawns on a Minecraft map image."
     )
-    parser.add_argument("--prefix", default="T/",
+    parser.add_argument("--prefix", default="2600/",
                         help="File prefix for all event files, e.g. 'c' → EVENT2.png, EVENT2_teams.txt, …")
-    parser.add_argument("--size", default=2400, type=int, help="Map size in blocks (side length)")
+    parser.add_argument("--size", default=2599, type=int, help="Map size in blocks (side length)")
     parser.add_argument("--spacing", default=300, type=int, help="Distance D between spawn points in blocks")
     parser.add_argument("--border", default=100, type=int, help="Min distance from border in blocks (default: 100)")
     parser.add_argument("--dot-size", default=None, type=int, help="Dot radius in pixels (default: auto)")
-    parser.add_argument("--font-size", default=30, type=int, help="Label font size in pixels")
+    parser.add_argument("--font-size", default=60, type=int, help="Label font size in pixels")
     parser.add_argument("--color", default="255,50,50", help="Grid dot color R,G,B (default: 255,50,50)")
     parser.add_argument("--grace_range", default=145, type=int, help="Grace zone radius in blocks (default: 145)")
     parser.add_argument(
@@ -735,6 +737,10 @@ def main():
     if p and p.endswith(("/", "\\")):
         Path(p).mkdir(parents=True, exist_ok=True)
 
+    # Crop the cubiomes screenshot into this event's map.png (screenshot is left untouched)
+    #if Path("screenshot.png").exists():
+        #crop_map("screenshot.png", image_path)
+
     if not Path(image_path).exists():
         print(f"Error: image file '{image_path}' not found.")
         sys.exit(1)
@@ -753,7 +759,7 @@ def main():
     print(f"Spacing:       {args.spacing} blocks")
     print(f"Border margin: {args.border} blocks")
     print(f"Grace radius:  {args.grace_range} blocks")
-    args.optimize_grid = False
+    args.optimize_grid = True
     if args.optimize_grid:
         offset_x, offset_z = find_optimal_grid_offset(
             args.size, args.spacing, args.border

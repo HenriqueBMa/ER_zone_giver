@@ -1,5 +1,0 @@
-Fireno_ob gold e5 f5 e6 f6
-Bardun blue D6 D7 C5 E5 C3
-Hellstorm red b7 f5 c2 d8 g1
-Woorbie dark_green D7 E5 F6 D8 C3
-GeoPupae dark_purple

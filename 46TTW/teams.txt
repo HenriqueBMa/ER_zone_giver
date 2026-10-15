@@ -1,2 +1,0 @@
-Green dark_green C3
-Purple dark_purple H3
