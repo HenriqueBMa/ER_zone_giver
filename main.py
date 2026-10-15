@@ -6,6 +6,7 @@ Two modes:
 
 1. GRID MODE  — overlay all valid spawn points on the map image.
    python mc_spawn_plotter.py --image map.png --size 4096 --spacing 300
+   python mc_spawn_plotter.py --image map.png --size 1200 --spacing 300 --optimize-grid
 
 2. WAR MODE   — read team picks, resolve conflicts, generate team image + commands.
    python mc_spawn_plotter.py --image map.png --size 4096 --spacing 300 --teams teams.txt
@@ -42,6 +43,7 @@ Arguments:
 """
 
 import argparse
+import math
 import random
 import sys
 from pathlib import Path
@@ -51,6 +53,23 @@ try:
 except ImportError:
     print("Pillow is required. Install it with:  pip install Pillow")
     sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Automatic water/beach zone exclusion
+# ---------------------------------------------------------------------------
+
+# Add more RGB colors here as needed.
+WATER_BEACH_COLORS = {
+    (32, 32, 112),
+    (0,0,64),
+    (0,0,112),
+    (0,0,144),
+    (0,0,172),
+    (0, 0, 255),
+    (112,112,214)
+}
+
+WATER_BEACH_THRESHOLD = 0.7
 
 # ---------------------------------------------------------------------------
 # Minecraft 1.21 team colors → RGB
@@ -74,6 +93,7 @@ MC_COLORS: dict[str, tuple[int, int, int]] = {
     "yellow":       (255, 255,  85),
     "white":        (255, 255, 255),
 }
+
 
 def _visible(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
     """Brighten very dark colors so they're readable on the map."""
@@ -110,28 +130,104 @@ def make_label(col_idx: int, row_idx: int) -> str:
 # Point generation
 # ---------------------------------------------------------------------------
 
-def generate_spawn_points(
+def find_optimal_grid_offset(
         map_size: int, spacing: int, border_margin: int
-) -> list[tuple[int, int, str]]:
-    """Returns list of (block_x, block_z, grid_label) for all valid grid points."""
+) -> tuple[int, int]:
+    """
+    Find the grid offset that fits the maximum number of points.
+
+    The grid is periodic with period ``spacing``, so only offsets in
+    [0, spacing) need to be considered. If several offsets fit the same
+    maximum number of points, prefer the one whose resulting coordinates
+    are most centered around 0.
+
+    Returns (offset_x, offset_z).
+    """
+    if spacing <= 0:
+        raise ValueError("spacing must be greater than 0")
+
     half = map_size / 2
     safe_min = -half + border_margin
     safe_max = half - border_margin
 
-    raw = []
-    x = 0
-    while x <= safe_max:
-        xs = [x] if x == 0 else [x, -x]
-        for bx in xs:
-            if safe_min <= bx <= safe_max:
-                y = 0
-                while y <= safe_max:
-                    ys = [y] if y == 0 else [y, -y]
-                    for by in ys:
-                        if safe_min <= by <= safe_max:
-                            raw.append((int(bx), int(by)))
-                    y += spacing
-        x += spacing
+    def best_axis_offset() -> int:
+        best_offset = 0
+        best_count = -1
+        best_center_distance = float("inf")
+
+        for offset in range(spacing):
+            first = math.ceil((safe_min - offset) / spacing)
+            last = math.floor((safe_max - offset) / spacing)
+            count = max(0, last - first + 1)
+
+            if count == 0:
+                center_distance = float("inf")
+            else:
+                first_pos = offset + first * spacing
+                last_pos = offset + last * spacing
+                center_distance = abs(first_pos + last_pos)
+
+            if (
+                count > best_count
+                or (count == best_count and center_distance < best_center_distance)
+            ):
+                best_count = count
+                best_offset = offset
+                best_center_distance = center_distance
+
+        return best_offset
+
+    offset = best_axis_offset()
+    return offset, offset
+
+
+def generate_spawn_points(
+        map_size: int, spacing: int, border_margin: int,
+        optimize_grid: bool = False
+) -> list[tuple[int, int, str]]:
+    """
+    Returns list of (block_x, block_z, grid_label) for all valid grid points.
+
+    By default the grid remains centered on (0, 0), preserving the old
+    behavior. With optimize_grid=True, the grid is shifted so that the
+    maximum possible number of equally-spaced points fits inside the safe
+    map area.
+    """
+    half = map_size / 2
+    safe_min = -half + border_margin
+    safe_max = half - border_margin
+
+    if optimize_grid:
+        offset_x, offset_z = find_optimal_grid_offset(
+            map_size, spacing, border_margin
+        )
+        x_values = range(
+            math.ceil((safe_min - offset_x) / spacing),
+            math.floor((safe_max - offset_x) / spacing) + 1,
+        )
+        z_values = range(
+            math.ceil((safe_min - offset_z) / spacing),
+            math.floor((safe_max - offset_z) / spacing) + 1,
+        )
+        xs = [offset_x + k * spacing for k in x_values]
+        zs = [offset_z + k * spacing for k in z_values]
+        raw = [(int(bx), int(bz)) for bx in xs for bz in zs]
+    else:
+        # Original behavior: grid is centered on (0, 0).
+        raw = []
+        x = 0
+        while x <= safe_max:
+            xs = [x] if x == 0 else [x, -x]
+            for bx in xs:
+                if safe_min <= bx <= safe_max:
+                    y = 0
+                    while y <= safe_max:
+                        ys = [y] if y == 0 else [y, -y]
+                        for by in ys:
+                            if safe_min <= by <= safe_max:
+                                raw.append((int(bx), int(by)))
+                        y += spacing
+            x += spacing
 
     raw = sorted(set(raw))
     xs_sorted = sorted(set(p[0] for p in raw))
@@ -179,6 +275,71 @@ def blocks_to_pixels(bx: int, bz: int, map_size: int, img_w: int, img_h: int) ->
     py = int((bz + map_size / 2) / map_size * img_h)
     return px, py
 
+def find_water_beach_zones(
+        image: Image.Image,
+        points: list[tuple[int, int, str]],
+        map_size: int,
+        grace_range: int,
+) -> set[str]:
+    """
+    Find grid zones whose circular area is >= 80% water/beach.
+
+    The circle is exactly the same size as the grace circle drawn on the map.
+    A pixel is considered water/beach if its RGB value is in
+    WATER_BEACH_COLORS.
+
+    Returns a set of grid labels to automatically exclude.
+    """
+    img = image.convert("RGB")
+    img_w, img_h = img.size
+    pixels = img.load()
+
+    grace_px = int(grace_range / map_size * img_w)
+    radius_sq = grace_px * grace_px
+
+    excluded = set()
+
+    for bx, bz, label in points:
+        px, py = blocks_to_pixels(
+            bx, bz, map_size, img_w, img_h
+        )
+
+        total_pixels = 0
+        water_beach_pixels = 0
+
+        # Only inspect pixels inside the circular zone.
+        min_x = max(0, px - grace_px)
+        max_x = min(img_w - 1, px + grace_px)
+        min_y = max(0, py - grace_px)
+        max_y = min(img_h - 1, py + grace_px)
+
+        for y in range(min_y, max_y + 1):
+            dy = y - py
+
+            for x in range(min_x, max_x + 1):
+                dx = x - px
+
+                if dx * dx + dy * dy > radius_sq:
+                    continue
+
+                total_pixels += 1
+
+                if pixels[x, y] in WATER_BEACH_COLORS:
+                    water_beach_pixels += 1
+
+        if total_pixels == 0:
+            continue
+
+        percentage = water_beach_pixels / total_pixels
+
+        if percentage >= WATER_BEACH_THRESHOLD:
+            excluded.add(label)
+            print(
+                f"  Auto-excluded {label}: "
+                f"{percentage:.1%} water/beach"
+            )
+
+    return excluded
 
 # ---------------------------------------------------------------------------
 # Text with drop-shadow
@@ -393,6 +554,7 @@ def plot_grid(
         grace_range: int = 145,
         excluded: set = None,
         custom_zones: list = None,
+        optimize_grid: bool = False,
 ):
     img = Image.open(image_path).convert("RGBA")
     img_w, img_h = img.size
@@ -404,7 +566,9 @@ def plot_grid(
 
     label_font, coords_font, _ = load_fonts(font_size)
 
-    points = generate_spawn_points(map_size, spacing, border_margin)
+    points = generate_spawn_points(
+        map_size, spacing, border_margin, optimize_grid=optimize_grid
+    )
     if excluded:
         points = [(bx, bz, lbl) for bx, bz, lbl in points if lbl not in excluded]
     if custom_zones:
@@ -442,6 +606,7 @@ def plot_war_result(
         grace_range: int = 145,
         excluded: set = None,
         custom_zones: list = None,
+        optimize_grid: bool = False,
 ):
     img = Image.open(image_path).convert("RGBA")
     img_w, img_h = img.size
@@ -454,7 +619,9 @@ def plot_war_result(
     label_font, coords_font, small_font = load_fonts(font_size)
 
     # All valid points (for faint background)
-    points = generate_spawn_points(map_size, spacing, border_margin)
+    points = generate_spawn_points(
+        map_size, spacing, border_margin, optimize_grid=optimize_grid
+    )
     if excluded:
         points = [(bx, bz, lbl) for bx, bz, lbl in points if lbl not in excluded]
     if custom_zones:
@@ -514,16 +681,21 @@ def main():
     parser = argparse.ArgumentParser(
         description="Overlay spawn grid / resolve team war spawns on a Minecraft map image."
     )
-    parser.add_argument("--prefix", default="EVENT2/EVENT2",
+    parser.add_argument("--prefix", default="T/",
                         help="File prefix for all event files, e.g. 'c' → EVENT2.png, EVENT2_teams.txt, …")
-    parser.add_argument("--size", default=3000, type=int, help="Map size in blocks (side length)")
+    parser.add_argument("--size", default=2400, type=int, help="Map size in blocks (side length)")
     parser.add_argument("--spacing", default=300, type=int, help="Distance D between spawn points in blocks")
     parser.add_argument("--border", default=100, type=int, help="Min distance from border in blocks (default: 100)")
     parser.add_argument("--dot-size", default=None, type=int, help="Dot radius in pixels (default: auto)")
     parser.add_argument("--font-size", default=30, type=int, help="Label font size in pixels")
     parser.add_argument("--color", default="255,50,50", help="Grid dot color R,G,B (default: 255,50,50)")
     parser.add_argument("--grace_range", default=145, type=int, help="Grace zone radius in blocks (default: 145)")
-    parser.add_argument("--seed", default=42, type=int, help="Random seed for conflict resolution")
+    parser.add_argument(
+        "--optimize-grid",
+        action="store_true",
+        help="Shift the spawn grid to maximize the number of equally-spaced zones inside the safe area",
+    )
+    parser.add_argument("--seed", default=42, type=int, help="ALWAYS SET TO 42")
     args = parser.parse_args()
 
     # Build all file paths from prefix.
@@ -581,6 +753,14 @@ def main():
     print(f"Spacing:       {args.spacing} blocks")
     print(f"Border margin: {args.border} blocks")
     print(f"Grace radius:  {args.grace_range} blocks")
+    args.optimize_grid = False
+    if args.optimize_grid:
+        offset_x, offset_z = find_optimal_grid_offset(
+            args.size, args.spacing, args.border
+        )
+        print(f"Grid placement: optimized (offset {offset_x}, {offset_z})")
+    else:
+        print("Grid placement: centered on (0, 0)")
 
     # Load excluded labels
     excluded: set[str] = set()
@@ -593,6 +773,38 @@ def main():
                 excluded.add(token.upper())
     if excluded:
         print(f"Excluded points:   {len(excluded)} ({', '.join(sorted(excluded))})")
+
+    # Automatically exclude zones that are mostly water/beach.
+    map_img = Image.open(image_path).convert("RGB")
+
+    grid_points = generate_spawn_points(
+        args.size,
+        args.spacing,
+        args.border,
+        optimize_grid=args.optimize_grid,
+    )
+
+    auto_excluded = find_water_beach_zones(
+        image=map_img,
+        points=grid_points,
+        map_size=args.size,
+        grace_range=args.grace_range,
+    )
+
+    new_auto_excluded = auto_excluded - excluded
+
+    if new_auto_excluded:
+        with Path(exclude_path).open("a") as f:
+            for label in sorted(new_auto_excluded):
+                f.write(f"{label}\n")
+
+        excluded.update(new_auto_excluded)
+
+        print(
+            f"Auto-excluded {len(new_auto_excluded)} "
+            f"water/beach zones: "
+            f"{', '.join(sorted(new_auto_excluded))}"
+        )
 
     # Load custom zones
     custom_zones: list[tuple[int, int, str]] = []
@@ -617,6 +829,7 @@ def main():
         grace_range=args.grace_range,
         excluded=excluded,
         custom_zones=custom_zones,
+        optimize_grid=args.optimize_grid,
     )
     print(f"\nGrid image saved to: {out}")
     print(f"Total spawn points:  {len(points)}  (grid: {len(points) - len(custom_zones)}, custom: {len(custom_zones)})")
@@ -674,6 +887,7 @@ def main():
         grace_range=args.grace_range,
         excluded=excluded,
         custom_zones=custom_zones,
+        optimize_grid=args.optimize_grid,
     )
     print(f"War result image:  {war_img}")
 

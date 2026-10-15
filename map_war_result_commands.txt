@@ -1,3 +1,0 @@
-/set_team_coordinates_ER Gold -300 600
-/set_team_coordinates_ER Red 900 300
-/mod_gamerules_ER graceRange 145

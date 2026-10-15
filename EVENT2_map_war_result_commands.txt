@@ -1,4 +1,0 @@
-/set_team_coordinates_ER Rising_Tide -800 -150
-/set_team_coordinates_ER Arakawa_Family 150 1250
-/set_team_coordinates_ER County_of_Rattenburg 600 600
-/mod_gamerules_ER graceRange 145
