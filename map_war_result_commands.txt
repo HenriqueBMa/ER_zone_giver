@@ -1,0 +1,7 @@
+/set_team_coordinates_ER Near 1050 1050
+/set_team_coordinates_ER Narickron -750 -1050
+/set_team_coordinates_ER Warrior -450 -1050
+/set_team_coordinates_ER Cold 450 1050
+/set_team_coordinates_ER Bishop -750 -450
+/set_team_coordinates_ER Ferrer -750 -750
+/mod_gamerules_ER graceRange 145

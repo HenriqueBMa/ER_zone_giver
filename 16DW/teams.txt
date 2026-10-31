@@ -1,4 +1,0 @@
-Purple dark_purple C4 X1 D7
-Gold gold f6 g6 f7
-Blue blue I7 E1 D7 I8
-Green dark_green c1 c4 d7
